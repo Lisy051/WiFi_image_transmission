@@ -1,6 +1,7 @@
 # WiFi_image_transmission
 
 这是一个使用python3编写的WiFi图传程序，可以在windows和linux平台运行
+传输距离大概在20到100米以内吧，主要还是得看无线网卡的信号强度和周边的电磁干扰
 
 需要安装以下python3模块：
 opencv-python
