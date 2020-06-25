@@ -29,24 +29,16 @@ def Run():
     uart = UART_Thread()
     osd = OSD()
     sock = Air()
-    dis = Distance()
 
     piCam = cv2.VideoCapture(0)
-    usbCam = cv2.VideoCapture(1)
 
     if not piCam.isOpened():
         print('没有找到树莓派摄像头')
-        return
-    if not usbCam.isOpened():
-        print('没有找到usb摄像头')
         return
 
     piCam.set(6,cv2.VideoWriter_fourcc(*"MJPG"))
     piCam.set(3,1280)
     piCam.set(4,720)
-    usbCam.set(6,cv2.VideoWriter_fourcc(*"MJPG"))
-    usbCam.set(3,1280)
-    usbCam.set(4,720)
 
     print('摄像头已打开')
     ret,imgL = piCam.read()
@@ -71,10 +63,7 @@ def Run():
     udp_RX_Thend.start()
     udp_TX_Thead = threading.Thread(target=sock.udp_SendImge)
     udp_TX_Thead.start()
-
-    disThend = threading.Thread(target=dis.findObject)
-    disThend.start()
-
+	
     time.sleep(1)
 
     print('准备就绪')
@@ -545,248 +534,6 @@ class Air:
     def getData(self):
         with UDP_LOCK:
             return self.data
-
-#==================================================
-#测距的实现
-#==================================================
-class Distance:
-
-    # ------------------------------
-    # 设置默认参数
-    # ------------------------------
-
-    #图像尺寸
-    pixel_width = 800
-    pixel_height = 600
-
-    #相机参数
-    angle_width = 78.5   #镜头水平视场角  （计算公式：[像素尺寸(um)/镜头焦距(mm)]*图像水平尺寸/17.45）
-    angle_height = 58.5  #64   #镜头垂直视场角  （计算公式：[像素尺寸(um)/镜头焦距(mm)]*图像垂直尺寸/17.45）
-    camera_separation = 4.93 #摄像头中心间距，单位cm
-
-    #图像的中心坐标
-    x_origin = 400
-    y_origin = 300
-
-    x_adjacent = None
-    x_adjacent = None
-
-    # ------------------------------
-    # 初始化参数
-    # ------------------------------
-    def __init__(self,pixel_width=None,pixel_height=None,angle_width=None,angle_height=None,camera_separation=None):
-
-        # 载入图像尺寸
-        if type(pixel_width) in (int,float):
-            self.pixel_width = int(pixel_width)
-        if type(pixel_height) in (int,float):
-            self.pixel_height = int(pixel_height)
-
-        # 载入摄像头的视场角
-        if type(angle_width) in (int,float):
-            self.angle_width = float(angle_width)
-        if type(angle_height) in (int,float):
-            self.angle_height = float(angle_height)
-        if not self.angle_height:
-            self.angle_height = self.angle_width*(self.pixel_height/self.pixel_width)
-
-        #载入摄像头间距
-        if type(camera_separation) in (int,float):
-            self.camera_separation = float(camera_separation)
-
-        # 重新计算图像的中心坐标
-        self.x_origin = int(self.pixel_width/2)
-        self.y_origin = int(self.pixel_height/2)
-
-        # 图像中的理论距离（以像素为单位）
-        # adjacent是邻边边长
-        # origin作为对边边长
-        self.x_adjacent = self.x_origin / math.tan(math.radians(self.angle_width/2))
-        self.y_adjacent = self.y_origin / math.tan(math.radians(self.angle_height/2))
-
-
-    # ------------------------------
-    # 计算目标图像的中心角度
-    # ------------------------------
-    def angles_from_center(self,x,y):
-
-        # 输入的x 是检测的目标的x坐标
-        # 输入的y 是检测的目标的y坐标
-        # opencv的图像坐标，左上角是（0，0）
-        
-        #把坐标原点移动到画面中心，用新的坐标来计算
-        x = x - self.x_origin
-        y = self.y_origin - y
-
-        xtan = x/self.x_adjacent
-        ytan = y/self.y_adjacent
-
-        xrad = math.atan(xtan)
-        yrad = math.atan(ytan)
-
-        return math.degrees(xrad),math.degrees(yrad)
-
-    # ------------------------------
-    # 计算像素偏离图像中心的角度
-    # ------------------------------
-    def pixels_from_center(self,x,y):
-
-        #最终结果与中心的角度相反
-        #x 与中心的水平角
-        #y 与中心的垂直角
-
-        x = math.radians(x)
-        y = math.radians(y)
-
-        return int(self.x_adjacent*math.tan(x)),int(self.y_adjacent*math.tan(y))
-
-    # ------------------------------
-    # 勾股定理
-    # ------------------------------
-    def distance_from_origin(self,*coordinates):
-        return math.sqrt(sum([x**2 for x in coordinates]))
-
-    # ------------------------------
-    # 从左摄像机中心返回目标的X坐标和Z坐标（Z在函数中是Y）
-    # ------------------------------
-    def intersection(self,langle,rangle):
-
-        # langle是从中心帧（上/右正）测量的相机与对象的左角度
-        # rangle是从中心帧（上/右正）测量到的与对象的右相机角度
-        # 左摄像机中心为原点（0,0）返回（X，Z）
-        # X是从左摄像机中心到右摄像机中心沿基线测量的
-        # Y是沿着X的垂线开始测量的
-
-        #固定角度方向（以图像中心为圆心）
-        #langle是从右开始测量的
-        #rangle是从左开始测量的
-        langle = math.pi/2 - langle
-        rangle = math.pi/2 + rangle
-
-        #计算左边和右边的正切角
-        ltan = math.tan(langle)
-        rtan = math.tan(rangle)
-
-        # 获取Y的值
-        # 计算公式： 摄像机的间距 = ( Y/ltan + Y/rtan )
-        Y = self.camera_separation / ( 1/ltan + 1/rtan )
-
-        # 利用Y从左摄像机中心获取X的值
-        X = Y/ltan
-
-        return X,Y
-
-    # ------------------------------
-    # 计算3维世界中的坐标
-    # ------------------------------
-    def location(self,lcamera,rcamera):
-
-        # 从传入的参数（左摄像头的目标的x,y和右摄像头的目标的x,y）中获取单独的x,y
-        lxangle,lyangle = lcamera
-        rxangle,ryangle = rcamera
-
-        # 因为摄像头是一样的，所有只需要一个yangle
-        yangle = (lyangle+ryangle)/2
-
-        lxangle = math.radians(lxangle)
-        rxangle = math.radians(rxangle)
-        yangle  = math.radians( yangle)
-
-        # 获取X和Z轴的距离（偏离中心）
-        X,Z = self.intersection(lxangle,rxangle)
-
-        # 获取Y轴上的距离（偏离中心）
-        # 利用y轴偏离角和二维距离测出
-        Y = math.tan(yangle) * self.distance_from_origin(X,Z)
-
-        # 把X坐标调整到两个摄像头的中心而不是左摄像机中心
-        X -= self.camera_separation/2
-
-        # 通过3维坐标计算出目标的距离
-        D = self.distance_from_origin(X,Y,Z)
-
-        return X,Y,Z,D
-
-    #-----------------------
-    #调用函数，直接出结果
-    #-----------------------
-    def get3D(self,L_x,L_y,R_x,R_y):
-        #print(L_x,L_y,R_x,R_y)
-        return self.location(self.angles_from_center(L_x,L_y),self.angles_from_center(R_x,R_y))
-
-    #==================================================
-    #模板匹配的实现
-    #==================================================
-    def imgMatch(self,template,img):
-
-        h, w = template.shape[:2]
-        H,W = img.shape[:2]
-        temp = img[int(H/3):int(H/3)*2]
-        temp = cv2.cvtColor(temp, cv2.COLOR_BGR2GRAY)
-        template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-        # 相关系数匹配方法：cv2.TM_CCOEFF
-        res = cv2.matchTemplate(temp, template, cv2.TM_CCOEFF)
-        #print('res:'+str(res))
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-        left_top = max_loc  # 左上角
-        x = left_top[0]
-        y = left_top[1] + int(H/3)
-        right_bottom = (x + w, y + h )  # 右下角
-        cv2.rectangle(img, (x,y), right_bottom, 255, 2)  # 画出矩形位置
-        cv2.circle(img, (int(x + w/2),int(y + h/2)), 10, (0, 0, 255))
-        return int(y + h/2),int(x + w/2),h*w
-
-    #==================================================
-    #寻找物体的实现
-    #==================================================
-    def findObject(self):
-        global imgL
-        global imgR
-
-        print('测距线程已开启')
-
-        while True:
-            with imge_LOCK:
-                Rimg = imgR
-                Limg = imgL
-            #边缘保留滤波（EPF）  高斯双边、均值迁移
-            img = Rimg.copy()
-            H,W = img.shape[:2]
-            temp = img[int(H/3):int(H/3)*2]
-
-            #均值迁移
-            dst = cv2.pyrMeanShiftFiltering(temp, 10, 50)
-
-            image = cv2.Canny(dst,200,300)
-    
-            contours,hierarchy = cv2.findContours(image,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-
-            num = 0
-            self.X = {}
-            self.Y = {}
-            self.Z = {}
-            self.D = {}
-
-            for cnt in contours:
-                if cv2.contourArea(cnt)>300:
-                    (x,y,w,h) = cv2.boundingRect(cnt)
-                    #x = x + int(w/3)
-                    y = y + int(H/3)
-                    make = Rimg[y:y+h,x:x+w]
-                    cv2.circle(img,(int(x+w/2),int(y+h/2)), 10, (0, 255, 0))
-                    Ly,Lx,s = self.imgMatch(make,Limg)
-                    if abs(s-w*h) < 10:
-                        try:
-                            self.X[num],self.Y[num],self.Z[num],self.D[num] = self.get3D(Lx,Ly,int(x+w/2),int(y+h/2))
-                            cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
-                            cv2.putText(img,'%.2f cm'%self.D[num],(x,y),0,1,(0,255,0))
-                            print('目标'+str(num)+'的距离：'+str(self.D[num])+'cm')
-                            print(self.X[num],self.Y[num],self.Z[num],self.D[num])
-                            num += 1
-                        except:
-                            pass
-            time.sleep(0.3)
-        print('测距线程已关闭')
 
 #==================================================
 #自动连接WiFi的实现
