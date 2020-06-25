@@ -4,7 +4,7 @@ import numpy
 import os,sys,time,traceback
 import threading
 import socket
-import netifaces
+import netifaces#这个模块好像在Linux下有问题
 from pywifi import const, PyWiFi, Profile
 
 def Run():
